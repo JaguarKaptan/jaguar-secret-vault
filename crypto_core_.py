@@ -7,6 +7,7 @@ from enum import Enum
 
 MAGIC_BYTES = b'\x8a\x91\xc2' #b'\x4a\x53\x56' -> JSV
 KDF_PARAMS = {1: {"time_cost": 3, "memory_cost": 102400, "parallelism": 8}}
+ENC_EXT = ".jsv"
 class Mode(Enum):
     ENCRYPT = "encrypt"
     DECRYPT = "decrypt"
@@ -58,6 +59,14 @@ def _derive_key(password: bytes, salt: bytes, version: int) -> bytes:
     return b64e(key)
 
 def encrypt_bytes(data: bytes, password: bytes, file_name: str, mtime: float) -> bytes:
+
+    magic_bytes = data[:VERSION_POS]
+
+    if magic_bytes == MAGIC_BYTES:
+        raise ValueError("The file is not compatible with jsv format!")
+    elif file_name.endswith(ENC_EXT):
+        raise ValueError("The file is already encrypted!")
+
     salt = secrets.token_bytes(16)
 
     key= _derive_key(password, salt, version=CURRENT_VERSION)
@@ -73,19 +82,20 @@ def encrypt_bytes(data: bytes, password: bytes, file_name: str, mtime: float) ->
 
 def decrypt_bytes(encrypted_data: bytes, password: bytes) -> tuple[dict, bytes]:
 
-    magic_bytes = encrypted_data[:VERSION_POS]
-    #magic_bytes = encrypted_data[:3]
+    if len(encrypted_data) < TOKEN_START_POS:
+        raise ValueError("Invalid JSV header")
 
-    if magic_bytes != MAGIC_BYTES:
-        raise ValueError(f"This is not a .jsv file!")
-    
-    # version = encrypted_data[3:4]
-    # salt = encrypted_data[4:20]
-    # ciphertext = encrypted_data[20:]
+    magic_bytes = encrypted_data[:VERSION_POS]
 
     version = encrypted_data[VERSION_POS]
     salt = encrypted_data[SALT_START_POS:TOKEN_START_POS]
     ciphertext = encrypted_data[TOKEN_START_POS:]
+
+    checks = check_for_jsv_format(magic_bytes, version, salt, ciphertext)
+    for passed in checks:
+        print(passed)
+        if checks[passed] != "":
+            raise ValueError(checks[passed])
     
     key = _derive_key(password, salt, version=version)
     try:
@@ -93,6 +103,28 @@ def decrypt_bytes(encrypted_data: bytes, password: bytes) -> tuple[dict, bytes]:
         return parse_payload(decrypted_data)
     except InvalidToken:
         raise ValueError("Invalid password or corrupted data")
+
+def check_for_jsv_format(magic_bytes: bytes, version: int, salt: bytes, ciphertext: bytes) -> dict:
+
+    error_log = {
+        "magic_bytes_error": "",
+        "version_error": "",
+        "salt_error": "",
+        "ciphertext_error": ""
+    }
+
+    if magic_bytes != MAGIC_BYTES:
+        error_log["magic_bytes_error"] = "The file is not compatible with jsv format!"
+    elif version not in KDF_PARAMS:
+        error_log["version_error"] = "The file crypto version is not valid with jsv format!"
+    elif len(salt) != SALT_LEN:
+        error_log["salt_error"] =  "Salt information is not as expected!"
+    elif ciphertext == None or len(ciphertext) == 0:
+        error_log["ciphertext_error"] = "The file doesn't have a valid data!"
+
+    return error_log
+
+    
 
     
 
@@ -102,7 +134,9 @@ def process_file(file_path: str, password: str, mode: Mode = Mode.ENCRYPT):
     path_name = Path(file_path)
 
     if not path_name.exists():                    
-            raise FileNotFoundError(f"{file_path} is not exists!")
+        raise FileNotFoundError(f"{file_path} is not exists!")
+
+
 
     file_name=path_name.name
     mtime=path_name.stat().st_mtime
@@ -114,17 +148,12 @@ def process_file(file_path: str, password: str, mode: Mode = Mode.ENCRYPT):
     match mode:
         case Mode.ENCRYPT:
             process_data = encrypt_bytes(raw_data, password.encode(), file_name = file_name, mtime = mtime)
-            output_file = path_name.with_name(f"encrypted_{path_name.stem}.jsv")
+            output_file = path_name.with_name(f"encrypted_{path_name.stem}{ENC_EXT}")
         case Mode.DECRYPT:
             metadata, process_data = decrypt_bytes(raw_data, password.encode())
             original_file = Path(metadata["name"]).name
             output_file = path_name.with_name(f"{original_file}")
 
-            # orj_file_name = Path(metadata["name"])
-            # orj_file_ext = orj_file_name.suffix
-            # output_file = orj_file_name.replace(file_ext, f"_decrypted{orj_file_ext}")
-            
-            #output_file = file_path
         case _:
             raise ValueError("Invalid mode. Use 'encrypt' or 'decrypt'.")
 
@@ -151,8 +180,6 @@ def check_and_prompt(output_file: Path) -> bool:
     else:
         return True
 
-
-        #raise FileExistsError(f"{output_file} is already exists!")
     
 def commit_output(temp_path: Path, output_file: Path, overwrite: bool) -> None:
     if overwrite:
@@ -187,13 +214,9 @@ file_path = "test_file.txt"
 file_path2 = "encrypted_test_file.jsv"
 
 password = "1234"
-mode = Mode.ENCRYPT
+mode = Mode.DECRYPT
 
-
-# blob = encrypt_bytes(b"hi", b"1234", "a.txt", 1.5)
-# print(blob[:4])                          # b'\x8a\x91\xc2\x01'
-# print(decrypt_bytes(blob, b"1234"))      # ({'name': 'a.txt', 'mtime': 1.5}, b'hi')
 
 if __name__ == "__main__":
-    process_file(file_path = file_path, password=password, mode=mode)
+    process_file(file_path = file_path2, password=password, mode=mode)
 
