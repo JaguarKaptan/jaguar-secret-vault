@@ -187,7 +187,7 @@ file_path = "test_file.txt"
 file_path2 = "encrypted_test_file.jsv"
 
 password = "1234"
-mode = "decrypt"
+mode = Mode.ENCRYPT
 
 
 # blob = encrypt_bytes(b"hi", b"1234", "a.txt", 1.5)
@@ -195,5 +195,5 @@ mode = "decrypt"
 # print(decrypt_bytes(blob, b"1234"))      # ({'name': 'a.txt', 'mtime': 1.5}, b'hi')
 
 if __name__ == "__main__":
-    process_file(file_path = file_path2, password=password, mode=Mode.ENCRYPT)
+    process_file(file_path = file_path, password=password, mode=mode)
 

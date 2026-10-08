@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+Old_code_backups_before_git/
+*.jsv
+*.tmp
+test_file*.txt
