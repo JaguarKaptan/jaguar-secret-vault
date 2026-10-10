@@ -62,12 +62,10 @@ def encrypt_bytes(data: bytes, password: bytes, file_name: str, mtime: float) ->
 
     magic_bytes = data[:VERSION_POS]
 
-    if magic_bytes == MAGIC_BYTES:
-        raise ValueError("The file is not compatible with jsv format!")
-    elif file_name.endswith(ENC_EXT):
+    if magic_bytes == MAGIC_BYTES or file_name.endswith(ENC_EXT):
         raise ValueError("The file is already encrypted!")
 
-    salt = secrets.token_bytes(16)
+    salt = secrets.token_bytes(SALT_LEN)
 
     key= _derive_key(password, salt, version=CURRENT_VERSION)
 
@@ -91,11 +89,8 @@ def decrypt_bytes(encrypted_data: bytes, password: bytes) -> tuple[dict, bytes]:
     salt = encrypted_data[SALT_START_POS:TOKEN_START_POS]
     ciphertext = encrypted_data[TOKEN_START_POS:]
 
-    checks = check_for_jsv_format(magic_bytes, version, salt, ciphertext)
-    for passed in checks:
-        print(passed)
-        if checks[passed] != "":
-            raise ValueError(checks[passed])
+    check_for_jsv_format(magic_bytes, version, salt, ciphertext)
+
     
     key = _derive_key(password, salt, version=version)
     try:
@@ -104,29 +99,24 @@ def decrypt_bytes(encrypted_data: bytes, password: bytes) -> tuple[dict, bytes]:
     except InvalidToken:
         raise ValueError("Invalid password or corrupted data")
 
-def check_for_jsv_format(magic_bytes: bytes, version: int, salt: bytes, ciphertext: bytes) -> dict:
-
-    error_log = {
-        "magic_bytes_error": "",
-        "version_error": "",
-        "salt_error": "",
-        "ciphertext_error": ""
-    }
+def check_for_jsv_format(magic_bytes: bytes, version: int, salt: bytes, ciphertext: bytes) -> None:
 
     if magic_bytes != MAGIC_BYTES:
-        error_log["magic_bytes_error"] = "The file is not compatible with jsv format!"
-    elif version not in KDF_PARAMS:
-        error_log["version_error"] = "The file crypto version is not valid with jsv format!"
-    elif len(salt) != SALT_LEN:
-        error_log["salt_error"] =  "Salt information is not as expected!"
-    elif ciphertext == None or len(ciphertext) == 0:
-        error_log["ciphertext_error"] = "The file doesn't have a valid data!"
-
-    return error_log
+        raise ValueError("The file is not compatible with jsv format!")
+    if version not in KDF_PARAMS:
+        raise ValueError("The file crypto version is not valid with jsv format!")
+    if not ciphertext:
+        raise ValueError("The file doesn't have a valid data!")
 
     
 
-    
+def unique_path(path: Path) -> Path:
+    candidate = path
+    n=2
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem}_{n}{path.suffix}")
+        n += 1
+    return candidate
 
 
 def process_file(file_path: str, password: str, mode: Mode = Mode.ENCRYPT):
@@ -148,7 +138,7 @@ def process_file(file_path: str, password: str, mode: Mode = Mode.ENCRYPT):
     match mode:
         case Mode.ENCRYPT:
             process_data = encrypt_bytes(raw_data, password.encode(), file_name = file_name, mtime = mtime)
-            output_file = path_name.with_name(f"encrypted_{path_name.stem}{ENC_EXT}")
+            output_file = unique_path(path_name.with_name(f"encrypted_{path_name.stem}{ENC_EXT}"))
         case Mode.DECRYPT:
             metadata, process_data = decrypt_bytes(raw_data, password.encode())
             original_file = Path(metadata["name"]).name
@@ -165,7 +155,8 @@ def process_file(file_path: str, password: str, mode: Mode = Mode.ENCRYPT):
 
     if overwrite and mode == Mode.DECRYPT:
         os.utime(output_file, (metadata["mtime"], metadata["mtime"]))
-        path_name.unlink()
+        if path_name.resolve() != output_file.resolve():
+           path_name.unlink()
 
 def check_and_prompt(output_file: Path) -> bool:
     if output_file.exists():       
@@ -214,9 +205,10 @@ file_path = "test_file.txt"
 file_path2 = "encrypted_test_file.jsv"
 
 password = "1234"
-mode = Mode.DECRYPT
+mode = Mode.ENCRYPT
 
 
 if __name__ == "__main__":
-    process_file(file_path = file_path2, password=password, mode=mode)
+    process_file(file_path = file_path, password=password, mode=mode)
 
+#TODO: TEST PROGRAMS WILL BE DONE
