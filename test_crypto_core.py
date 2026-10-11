@@ -127,14 +127,7 @@ def test_encrypt_rejects_double_encryption():
     with pytest.raises(ValueError):
         core.encrypt_bytes(b"abc", PASSWORD, "a" + ".jsv", 1.0)
 
-@pytest.mark.parametrize("name, mtime, data, expected", PAYLOAD_CASES)
-def test_encrypt_decrypt_roundtrip(name, mtime, data, expected):
-    encrypted_data = core.encrypt_bytes(data,PASSWORD, name, mtime)
-    metadata, raw_data = core.decrypt_bytes(encrypted_data, PASSWORD)
 
-    assert raw_data == data
-    assert metadata["name"] == name
-    assert metadata["mtime"] == mtime
 
 # ----------------------------------------- #
 #            DECRYPTION TESTS               #
@@ -168,4 +161,23 @@ def test_decrypt_tampered(pos):
     blob[pos] ^= 0x01 
     with pytest.raises(ValueError):
         core.decrypt_bytes(bytes(blob), SECRET_PASSWORD)
+
+
+# ----------------------------------------- #
+#            ENC-DEC-CYCLE TESTS            #
+# ----------------------------------------- #
+
+@pytest.mark.parametrize("name, mtime, data, expected", PAYLOAD_CASES)
+def test_encrypt_decrypt_roundtrip(name, mtime, data, expected):
+    encrypted_data = core.encrypt_bytes(data,PASSWORD, name, mtime)
+    metadata, raw_data = core.decrypt_bytes(encrypted_data, PASSWORD)
+
+    assert raw_data == data
+    assert metadata["name"] == name
+    assert metadata["mtime"] == mtime
+
+# ----------------------------------------- #
+#                FILE TESTS                 #
+# ----------------------------------------- #
+
 
