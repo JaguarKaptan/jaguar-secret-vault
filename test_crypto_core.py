@@ -1,5 +1,6 @@
 import pytest
 import crypto_core as core
+from base64 import urlsafe_b64encode as b64e, urlsafe_b64decode as b64d
 
 PAYLOAD_CASES = [
     pytest.param("report.pdf", 1.5, b"hello, world!", b'\x00${"name": "report.pdf", "mtime": 1.5}hello, world!',id="Standard"),
@@ -8,6 +9,30 @@ PAYLOAD_CASES = [
     pytest.param("x" * 100, 1.5, b"\x00\x01", b'\x00~{"name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "mtime": 1.5}\x00\x01', id="long_name"),
 ]
 
+FIXED_SALT = b'c\xd4\xac\xf6\x8cAH\x19K\x92\x1d\xc1\x9b\xc4\xc0\x8c'
+FIXED_SALT_2 = b';\x0e\x872)\xe2\x8d\xd1\xfe5\xd1\x02\xa1L8\xa9'
+PASSWORD = b'test-password123321'
+PASSWORD_2 = B'TEST-PASSWORD-2'
+VERSION = 1
+VERSION_2 = 2
+KNOWN_ANSWER_1 = b'jyluEwp2A55s1CSlMUfyE23c86XmrTIofcRBpJtAGQ4='
+
+
+
+# out = core.encrypt_bytes(b"SECRET-DATA", b"secret-password", "note.txt", 1700000000.0)
+# print(out.hex())
+
+SECRET_DATA = b'SECRET-DATA'
+SECRET_FILE_NAME = "note.txt"
+SECRET_MTIME = 1700000000.0
+SECRET_PASSWORD = b'secret-password'
+SECRET = bytes.fromhex("8a91c2015700e6551de1ad323bfa35bf741c53a980000000006acc0594b2f56f9610a30f39186027e15d8cda9c769f4820d0871746d3cc20e38a7645d9ee8716eaeb6ef4c0f2beba9d134ed4480dc35fcfe73b3e210bbc13305e771adfc17b084dbb447b354a63c978b70d26da40f8d33c73578063ac11a56a700f429dbb2e3a514f966ce88729d18577dddb00")
+
+
+
+# ----------------------------------------- #
+#               PAYLOAD TESTS               #
+# ----------------------------------------- #
 
 @pytest.mark.parametrize("name, mtime, data, expected", PAYLOAD_CASES)
 def test_build_payload_known_bytes(name, mtime, data, expected):
@@ -23,6 +48,8 @@ def test_parse_payload_known_bytes(name, mtime, data, expected):
     assert metadata == {"name": name, "mtime": mtime}
     assert raw_data == data
 
+
+def test_parse_payload_inappropriate_length():
     payload_2 = b'\x00${"name": "report.pdf", "mtime": 0}hello, world!'
     with pytest.raises(ValueError):
         core.parse_payload(payload_2)
@@ -32,15 +59,6 @@ def test_parse_payload_known_bytes(name, mtime, data, expected):
         core.parse_payload(payload_3)
 
 
-
-
-
-# @pytest.mark.parametrize("name, mtime, data", [
-#     ("report.pdf", 1.5, b"hello, world!"),
-#     ("şifre.txt", 0.0, b""),                                  # Turkish name, empty file
-#     ("a b.tar.gz", 1_600_000_000.25, bytes(range(256))),      # Each bytes value
-#     ("x" * 200, 1.5, b"\x00\x01"),                            # Long name
-# ])
 @pytest.mark.parametrize("name, mtime, data, expected", PAYLOAD_CASES)
 def test_payload_roundtrip(name, mtime, data, expected):
     payload = core.build_payload(name, mtime, data)
@@ -49,4 +67,105 @@ def test_payload_roundtrip(name, mtime, data, expected):
     assert metadata["name"] == name
     assert metadata["mtime"] == mtime
     assert parsed_data == data
+
+
+# ----------------------------------------- #
+#            KEY DERIVITION TESTS           #
+# ----------------------------------------- #
+
+
+def test_deterministic_behaviour():
+    assert core._derive_key(PASSWORD,FIXED_SALT,VERSION) == core._derive_key(PASSWORD,FIXED_SALT,VERSION)
+
+def test_different_password():
+    assert core._derive_key(PASSWORD,FIXED_SALT,VERSION) != core._derive_key(PASSWORD_2,FIXED_SALT,VERSION)
+
+def test_different_salt():
+    assert core._derive_key(PASSWORD,FIXED_SALT,VERSION) != core._derive_key(PASSWORD,FIXED_SALT_2,VERSION)
+
+def test_different_version(monkeypatch):
+    p = core.KDF_PARAMS[VERSION]
+    monkeypatch.setitem(core.KDF_PARAMS, VERSION_2, {**p, "time_cost": p["time_cost"] + 1})
+    assert core._derive_key(PASSWORD, FIXED_SALT, VERSION) != core._derive_key(PASSWORD, FIXED_SALT, 2)
+
+def test_key_length():
+    key = core._derive_key(PASSWORD, FIXED_SALT, VERSION)
+    assert len(b64d(key)) == 32
+
+def test_unsupported_version():
+    with pytest.raises(ValueError):
+        core._derive_key(PASSWORD, FIXED_SALT, 555)
+
+def test_known_answer():
+    assert core._derive_key(PASSWORD, FIXED_SALT, VERSION) == KNOWN_ANSWER_1
+
+
+# ----------------------------------------- #
+#            ENCRYPTION TESTS               #
+# ----------------------------------------- #
+
+def test_encrypt_header_layout():
+    out = core.encrypt_bytes(b"abc", PASSWORD, "a.txt", 1.0)
+    assert out[:3] == b'\x8a\x91\xc2'      
+    assert out[3] == 1            
+    assert len(out) > 3 + 1 + 16  
+
+def test_encrypt_is_random():
+    a = core.encrypt_bytes(b"abc", PASSWORD, "a.txt", 1.0)
+    b = core.encrypt_bytes(b"abc", PASSWORD, "a.txt", 1.0)
+    assert a != b  
+
+def test_encrypt_hides_plaintext():
+    out = core.encrypt_bytes(b"SUPER-SECRET-SYMBOL", PASSWORD, "document.txt", 1.0)
+    assert b"SUPER-SECRET-SYMBOL" not in out
+    assert b"document" not in out 
+
+def test_encrypt_rejects_double_encryption():
+    once = core.encrypt_bytes(b"abc", PASSWORD, "a.txt", 1.0)
+    with pytest.raises(ValueError):
+        core.encrypt_bytes(once, PASSWORD, "a.txt", 1.0)
+    with pytest.raises(ValueError):
+        core.encrypt_bytes(b"abc", PASSWORD, "a" + ".jsv", 1.0)
+
+@pytest.mark.parametrize("name, mtime, data, expected", PAYLOAD_CASES)
+def test_encrypt_decrypt_roundtrip(name, mtime, data, expected):
+    encrypted_data = core.encrypt_bytes(data,PASSWORD, name, mtime)
+    metadata, raw_data = core.decrypt_bytes(encrypted_data, PASSWORD)
+
+    assert raw_data == data
+    assert metadata["name"] == name
+    assert metadata["mtime"] == mtime
+
+# ----------------------------------------- #
+#            DECRYPTION TESTS               #
+# ----------------------------------------- #
+
+def test_decrypt_secret():
+    meta, data = core.decrypt_bytes(SECRET, SECRET_PASSWORD)
+    assert data == b"SECRET-DATA"
+    assert meta["name"] == "note.txt"
+    assert meta["mtime"] == 1700000000.0
+
+def test_decrypt_wrong_password():
+    with pytest.raises(ValueError):
+        core.decrypt_bytes(SECRET, b"wrong-password")
+
+def test_decrypt_too_short():
+    with pytest.raises(ValueError):
+        core.decrypt_bytes(b"abc", SECRET_PASSWORD)
+
+def test_decrypt_header_only():
+    with pytest.raises(ValueError):
+        core.decrypt_bytes(SECRET[:20], SECRET_PASSWORD)  
+
+def test_decrypt_truncated():
+    with pytest.raises(ValueError):
+        core.decrypt_bytes(SECRET[:-1], SECRET_PASSWORD)  
+
+@pytest.mark.parametrize("pos", [0, 3, 5, 20, len(SECRET) // 2, -1])  # magic, version, SALT, Fernet_title, ciphertext middle, HMAC END
+def test_decrypt_tampered(pos):
+    blob = bytearray(SECRET)
+    blob[pos] ^= 0x01 
+    with pytest.raises(ValueError):
+        core.decrypt_bytes(bytes(blob), SECRET_PASSWORD)
 
