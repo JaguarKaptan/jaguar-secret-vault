@@ -1,6 +1,7 @@
 import pytest
 import crypto_core as core
 from base64 import urlsafe_b64encode as b64e, urlsafe_b64decode as b64d
+import os
 
 PAYLOAD_CASES = [
     pytest.param("report.pdf", 1.5, b"hello, world!", b'\x00${"name": "report.pdf", "mtime": 1.5}hello, world!',id="Standard"),
@@ -181,3 +182,53 @@ def test_encrypt_decrypt_roundtrip(name, mtime, data, expected):
 # ----------------------------------------- #
 
 
+def test_encrypt_file_keeps_original(tmp_path):
+    src = tmp_path / SECRET_FILE_NAME
+    src.write_bytes(SECRET_DATA)
+
+    core.process_file(str(src), "pw", core.Mode.ENCRYPT)
+
+    out = tmp_path / "encrypted_note.jsv"
+    assert out.exists()
+    assert src.read_bytes() == SECRET_DATA   
+    assert SECRET_DATA not in out.read_bytes()   
+
+
+def test_file_roundtrip_restores_content_and_mtime(tmp_path):
+    src = tmp_path / SECRET_FILE_NAME
+    src.write_bytes(SECRET_DATA)
+    os.utime(src, (1_700_000_000, 1_700_000_000))
+
+    core.process_file(str(src), "pw", core.Mode.ENCRYPT)
+    src.unlink()  
+
+    enc = tmp_path / "encrypted_note.jsv"
+    core.process_file(str(enc), "pw", core.Mode.DECRYPT)
+
+    restored = tmp_path / SECRET_FILE_NAME
+    assert restored.read_bytes() == SECRET_DATA
+    assert restored.stat().st_mtime == 1_700_000_000
+    assert not enc.exists()                   
+
+def test_overwrite_declined_keeps_file_and_no_tmp(tmp_path, monkeypatch):
+    src = tmp_path / SECRET_FILE_NAME
+    src.write_bytes(SECRET_DATA)
+    core.process_file(str(src), "pw", core.Mode.ENCRYPT)
+
+    enc = tmp_path / "encrypted_note.jsv"
+    src.write_bytes(b"OTHER CONTENT")
+    questions = []
+
+    def lambda_func(question):
+        questions.append(question)
+        return "n"
+    
+    monkeypatch.setattr("builtins.input", lambda_func)
+
+    core.process_file(str(enc), "pw", core.Mode.DECRYPT)
+
+    assert len(questions) == 1
+    assert enc.exists()
+    assert SECRET_FILE_NAME in questions[0]
+    assert src.read_bytes() == b"OTHER CONTENT"  
+    assert list(tmp_path.glob("*.tmp")) == []
